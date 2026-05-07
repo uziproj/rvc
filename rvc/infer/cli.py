@@ -87,13 +87,17 @@ class VoiceConverter:
                 audio /= audio_max
 
             if not self.hubert_model:
-                HUBERT_PATH = os.path.join(os.getcwd(), "assets", "models")
-                embedder_model_path = os.path.join(HUBERT_PATH, embedder_model + ".pt")
-                if not os.path.exists(embedder_model_path):
-                    raise FileNotFoundError(f"[ERROR] Not found embeddeder: {embedder_model}")
+                if self.config.hubert_model is not None:
+                    self.hubert_model = self.config.hubert_model
+                else:
+                    check_embedders(embedder_model)
+                    HUBERT_PATH = os.path.join(os.getcwd(), "assets", "models")
+                    embedder_model_path = os.path.join(HUBERT_PATH, embedder_model + ".pt")
+                    if not os.path.exists(embedder_model_path):
+                        raise FileNotFoundError(f"[ERROR] Not found embeddeder: {embedder_model}")
 
-                models = fairseq.load_model(embedder_model_path).to(self.device).eval()
-                self.hubert_model = models.half() if self.config.is_half else models.float()
+                    models = fairseq.load_model(embedder_model_path).to(self.device).eval()
+                    self.hubert_model = models.half() if self.config.is_half else models.float()
 
             if split_audio:
                 chunks = cut(
@@ -213,7 +217,7 @@ class VoiceConverter:
 
 def convert_audio(args):
     """Main conversion function"""
-    config = Config()
+    config = Config(embedder_model=args.embedder, f0_method=args.f0_method)
 
     check_predictors(args.f0_method)
     check_embedders(args.embedder)

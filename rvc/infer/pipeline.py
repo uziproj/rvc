@@ -32,6 +32,7 @@ class Pipeline:
         self.f0_max = 1100
         self.device = config.device
         self.is_half = config.is_half
+        self.config = config
 
     def voice_conversion(self, model, net_g, sid, audio0, pitch, pitchf, index, big_npy, index_rate, version, protect, energy):
         # Check if audio0 is too short
@@ -206,7 +207,7 @@ class Pipeline:
 
         if pitch_guidance:
             if not hasattr(self, "f0_generator"): 
-                self.f0_generator = Generator(self.sample_rate, hop_length, self.f0_min, self.f0_max, self.is_half, self.device)
+                self.f0_generator = Generator(self.sample_rate, hop_length, self.f0_min, self.f0_max, self.is_half, self.device, config=self.config)
             pitch, pitchf = self.f0_generator.calculator(f0_method, audio_pad, f0_up_key, p_len, filter_radius, f0_autotune, f0_autotune_strength, proposal_pitch=proposal_pitch, proposal_pitch_threshold=proposal_pitch_threshold)
 
             if self.device == "mps": 

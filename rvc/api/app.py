@@ -192,7 +192,7 @@ class ErrorResponse(BaseModel):
 async def startup():
     global _config
     logger.info("Initializing RVC Config...")
-    _config = Config()
+    _config = Config(embedder_model="contentvec_base", f0_method="rmvpe")
     logger.info(f"Device: {_config.device}, Half precision: {_config.is_half}")
     os.makedirs(os.path.join(os.getcwd(), "assets", "models"), exist_ok=True)
     logger.info("RVC API ready.")

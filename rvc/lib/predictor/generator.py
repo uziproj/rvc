@@ -41,13 +41,14 @@ def proposal_f0_up_key(f0, target_f0 = 155.0, limit = 12):
     return max(-limit, min(limit, int(np.round(12 * np.log2(target_f0 / extract_median_f0(f0))))))
 
 class Generator:
-    def __init__(self, sample_rate = 16000, hop_length = 160, f0_min = 50, f0_max = 1100, is_half = False, device = "cpu"):
+    def __init__(self, sample_rate = 16000, hop_length = 160, f0_min = 50, f0_max = 1100, is_half = False, device = "cpu", config = None):
         self.sample_rate = sample_rate
         self.hop_length = hop_length
         self.f0_min = f0_min
         self.f0_max = f0_max
         self.is_half = is_half
         self.device = device
+        self.config = config
         self.window = 160
         self.ref_freqs = [49.00, 51.91, 55.00, 58.27, 61.74, 65.41, 69.30, 73.42, 77.78, 82.41, 87.31, 92.50, 98.00, 103.83, 110.00, 116.54, 123.47, 130.81, 138.59, 146.83, 155.56, 164.81, 174.61, 185.00, 196.00,  207.65, 220.00, 233.08, 246.94, 261.63, 277.18, 293.66, 311.13, 329.63, 349.23, 369.99, 392.00, 415.30, 440.00, 466.16, 493.88, 523.25, 554.37, 587.33, 622.25, 659.25, 698.46, 739.99, 783.99, 830.61, 880.00, 932.33, 987.77, 1046.50]
         self.autotune = Autotune(self.ref_freqs)
@@ -244,14 +245,18 @@ class Generator:
     
     def get_f0_rmvpe(self, x, p_len, legacy=False):
         if not hasattr(self, "rmvpe"): 
-            self.rmvpe = RMVPE(
-                os.path.join(
-                    PREDICTOR_MODEL, 
-                    "rmvpe.pt"
-                ), 
-                is_half=self.is_half, 
-                device=self.device, 
-            )
+            # Use pre-loaded rmvpe model from config if available
+            if self.config is not None and self.config.rmvpe_model is not None:
+                self.rmvpe = self.config.rmvpe_model
+            else:
+                self.rmvpe = RMVPE(
+                    os.path.join(
+                        PREDICTOR_MODEL, 
+                        "rmvpe.pt"
+                    ), 
+                    is_half=self.is_half, 
+                    device=self.device, 
+                )
 
         f0 = self.rmvpe.infer_from_audio_with_pitch(x, thred=0.03, f0_min=self.f0_min, f0_max=self.f0_max) if legacy else self.rmvpe.infer_from_audio(x, thred=0.03)
         return self._resize_f0(f0, p_len)
