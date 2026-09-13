@@ -22,7 +22,7 @@ from rvc.lib.config import Config
 for l in ["torch", "faiss", "omegaconf", "httpx", "httpcore", "faiss.loader", "numba.core", "urllib3", "transformers", "matplotlib"]:
     logging.getLogger(l).setLevel(logging.ERROR)
 
-def run_inference_script(
+def infer_main(
     config,
     pitch=0, 
     filter_radius=3, 
