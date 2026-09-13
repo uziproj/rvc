@@ -44,9 +44,12 @@ rvc -i input.wav -o output.wav -m model.pth -p 12
 
 ### Python API
 
+All public symbols are re-exported at the top level, so `from rvc import *` (or
+explicit imports like `from rvc import Config, run_inference_script`) is the
+recommended way to use the library.
+
 ```python
-from rvc.infer.infer import run_inference_script
-from rvc.lib.config import Config
+from rvc import Config, run_inference_script
 
 # Hubert and RMVPE models load eagerly at Config initialization
 config = Config(embedder_model="contentvec_base", f0_method="rmvpe")
@@ -59,6 +62,18 @@ run_inference_script(
     pitch=12,
     f0_method="rmvpe",
 )
+```
+
+You can also use the wildcard form, which exposes every public name:
+
+```python
+from rvc import *
+
+print(__version__)          # "0.1.0"
+print(F0_METHODS[:3])       # ['pm', 'dio', 'mangio-crepe-tiny']
+
+config = Config()
+converter = VoiceConverter(config, model_path="model.pth", sid=0)
 ```
 
 ## Installation
@@ -289,6 +304,7 @@ The following bugs have been identified and fixed in this repository:
 - **Unused deps**: `tkinter-embed` and `customtkinter` declared but never imported — removed
 - **Wrong GitHub URLs**: `pyproject.toml`, README, DOCUMENTATION, Colab notebook, and LICENSE all pointed to `SawitProject/rvc` instead of `uziproj/rvc`
 - **Hop-length tip wrong**: docs claimed default was `128`; actual default is `64`
+- **No top-level exports**: users had to write `from rvc.infer.infer import run_inference_script` / `from rvc.lib.config import Config` etc. — added re-exports so `from rvc import *` and `from rvc import Config, run_inference_script` both work
 
 For the complete list, see [DOCUMENTATION.md](DOCUMENTATION.md).
 

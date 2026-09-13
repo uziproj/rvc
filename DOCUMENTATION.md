@@ -212,10 +212,39 @@ rvc -i input.wav -o output.wav -m model.pth -f0 "hybrid[rmvpe+fcpe]"
 
 ## Python API
 
+All public symbols are re-exported at the top level. The recommended way to use
+the library is the explicit form (pick only what you need) or the wildcard form
+(`from rvc import *`) when experimenting:
+
+```python
+from rvc import Config, run_inference_script, VoiceConverter, Generator, Autotune, F0_METHODS, load_audio
+# or, equivalently:
+# from rvc import *
+```
+
+| Symbol | Source module | Purpose |
+|--------|---------------|---------|
+| `Config` | `rvc.lib.config` | Device + eager model loading configuration |
+| `run_inference_script` / `infer_main` | `rvc.infer.infer` | One-shot voice conversion |
+| `VoiceConverter` | `rvc.infer.cli` | Stateful converter (load model once, convert many) |
+| `Pipeline` | `rvc.infer.pipeline` | Low-level inference pipeline |
+| `Generator` | `rvc.lib.predictor.generator` | F0/pitch extraction dispatcher |
+| `Autotune` | `rvc.utils` | Snap F0 contour to musical scale |
+| `load_audio` | `rvc.utils` | Load + resample + optional formant shift |
+| `F0_METHODS` | `rvc.var` | List of all supported F0 method names |
+| `main` / `convert_audio` | `rvc.infer.cli` | CLI entry points (re-usable from Python) |
+
+The FastAPI app is intentionally **not** re-exported at the top level — that
+keeps `import rvc` lightweight and avoids pulling in FastAPI unless the user
+asks for it. To use the REST API, import it directly:
+
+```python
+from rvc.api.app import app, main as api_main
+```
+
 ### Basic Inference
 ```python
-from rvc.infer.infer import run_inference_script
-from rvc.lib.config import Config
+from rvc import Config, run_inference_script
 
 # Hubert and RMVPE models are preloaded at Config initialization
 # Pass embedder_model and f0_method to specify which models to load eagerly
@@ -233,8 +262,7 @@ run_inference_script(
 
 ### Using VoiceConverter Directly
 ```python
-from rvc.infer.cli import VoiceConverter
-from rvc.lib.config import Config
+from rvc import Config, VoiceConverter
 
 # Models preload at startup — hubert (embedder) and rmvpe (predictor)
 config = Config(embedder_model="contentvec_base", f0_method="rmvpe")
@@ -258,8 +286,7 @@ converter.convert_audio(
 
 ### Pitch Extraction
 ```python
-from rvc.lib.predictor.generator import Generator
-from rvc.lib.config import Config
+from rvc import Config, Generator
 
 # Preload RMVPE via Config, then pass config to Generator
 config = Config(embedder_model="contentvec_base", f0_method="rmvpe")
@@ -277,7 +304,7 @@ f0_mel, f0_hz = gen.calculator(
 
 ### Autotune
 ```python
-from rvc.utils import Autotune
+from rvc import Autotune
 
 ref_freqs = [49.00, 51.91, 55.00, 58.27, 61.74, 65.41, 69.30, 73.42, 77.78, 82.41,
              87.31, 92.50, 98.00, 103.83, 110.00, 116.54, 123.47, 130.81, 138.59, 146.83]
@@ -541,7 +568,7 @@ By default, `Config()` preloads two heavy models at initialization time so that 
 - **RMVPE** (pitch predictor): Estimates fundamental frequency (F0). Controlled via the `f0_method` parameter (default: `"rmvpe"").
 
 ```python
-from rvc.lib.config import Config
+from rvc import Config
 
 # Default: loads contentvec_base + rmvpe
 config = Config()
@@ -734,6 +761,11 @@ These bugs were discovered while auditing the package for v0.1.1. They prevented
 - **File**: `DOCUMENTATION.md`
 - **Description**: Performance Tips section said "Use `-hl 128` (default hop length) for best quality; increase for faster processing". This was double-wrong: (1) the actual default is `64`, not `128`; (2) the relationship is inverted — *increasing* `-hl` makes pitch extraction faster and lower quality, not the other way around.
 - **Fix**: Rewrote to "Use `-hl 128` for higher-quality pitch extraction (default is `64`; increase to trade speed for accuracy)".
+
+#### BUG 36: No top-level exports — users had to memorize deep submodule paths
+- **Files**: `rvc/__init__.py`, `README.md`, `DOCUMENTATION.md`, `colab/rvc_demo.ipynb`
+- **Description**: Every documented Python example used verbose deep imports like `from rvc.infer.infer import run_inference_script`, `from rvc.lib.config import Config`, `from rvc.lib.predictor.generator import Generator`, `from rvc.utils import Autotune`. This made the public API look more cluttered than it actually is, and forced users to memorize the internal package layout just to get started. The top-level `rvc/__init__.py` only re-exported `main`, `convert_audio`, `VoiceConverter`, and `infer_main` — so even `from rvc import Config` failed with `ImportError`.
+- **Fix**: Re-exported all public symbols (`Config`, `PREDICTOR_MODEL`, `Pipeline`, `Generator`, `Autotune`, `load_audio`, `check_predictors`, `check_embedders`, `clear_gpu_cache`, `change_rms`, `HF_download_file`, `F0_METHODS`) at the top level so both `from rvc import Config, run_inference_script` and `from rvc import *` work. Updated README / DOCUMENTATION / Colab notebook to use the short form throughout. The FastAPI app is intentionally kept out of the top-level namespace so `import rvc` stays lightweight.
 
 ## Troubleshooting
 
