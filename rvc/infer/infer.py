@@ -137,6 +137,10 @@ def infer_main(
 
         print("[INFO] Conversion complete.")
 
+# Backwards-compatible alias: README / DOCUMENTATION / Colab notebook
+# import `run_inference_script` — keep both names pointing at the same callable.
+run_inference_script = infer_main
+
 class VoiceConverter:
     def __init__(self, config, model_path, sid = 0):
         self.config = config
@@ -174,7 +178,7 @@ class VoiceConverter:
         f0_autotune_strength=1,
         split_audio=False,
         clean_audio=False,
-        clean_strength=0.5,
+        clean_strength=0.7,
         formant_shifting=False,
         formant_qfrency=0.8, 
         formant_timbre=0.8, 

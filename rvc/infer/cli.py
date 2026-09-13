@@ -72,7 +72,7 @@ class VoiceConverter:
         f0_autotune_strength=1,
         split_audio=False,
         clean_audio=False,
-        clean_strength=0.5,
+        clean_strength=0.7,
         formant_shifting=False,
         formant_qfrency=0.8, 
         formant_timbre=0.8, 
@@ -396,7 +396,7 @@ Examples:
     args = parser.parse_args()
 
     if args.version:
-        from rvc.infer import __version__
+        from rvc import __version__
         print(f"RVC CLI Tool v{__version__}")
         return
 

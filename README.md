@@ -28,7 +28,7 @@ A simple, high-quality voice conversion tool focused on simplicity and ease of u
 ### Try it in Google Colab
 Click the badge below to open a ready-to-run demo notebook — no local installation required:
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/SawitProject/rvc/blob/main/colab/rvc_demo.ipynb)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/uziproj/rvc/blob/main/colab/rvc_demo.ipynb)
 
 ### Install
 
@@ -276,6 +276,19 @@ The following bugs have been identified and fixed in this repository:
 - **GELU Activation**: `gelu_accurate()` returned `None` on all calls after the first
 - **Fairseq Assertion**: `assert src_len, key_bsz == value.shape[:2]` was parsed as a tuple assertion (always True)
 - **Cross-Attention**: `SelfAttention.forward()` left `out` undefined when `cross_attend=True`
+
+### Packaging & Documentation Fixes (v0.1.1)
+- **Package imports broken**: `rvc/__init__.py` used `from infer.cli import ...` instead of `from rvc.infer.cli import ...` — `import rvc` raised `ModuleNotFoundError`
+- **`run_inference_script` alias missing**: README/DOCUMENTATION/Colab notebook all reference `run_inference_script`, but only `infer_main` was defined — added backward-compatible alias
+- **`rvc --version` crashed**: imported `__version__` from the wrong module (`rvc.infer` instead of `rvc`)
+- **Missing `__init__.py` files**: `rvc/infer/` and `rvc/lib/` had only stale `.pyc` files; added real `__init__.py`
+- **Version / author mismatch**: `rvc.__version__ = "1.0.0"` and `__author__ = "BF667"` did not match `pyproject.toml` (`0.1.0` / `uziproj`)
+- **`clean_strength` default divergence**: CLI default was `0.7`, but `VoiceConverter.convert_audio` defaulted to `0.5`
+- **Missing `tqdm` dependency**: used in `utils.py` and `gdown.py` but never declared
+- **Missing API deps in `requirements.txt`**: `fastapi`, `uvicorn`, `python-multipart` were missing
+- **Unused deps**: `tkinter-embed` and `customtkinter` declared but never imported — removed
+- **Wrong GitHub URLs**: `pyproject.toml`, README, DOCUMENTATION, Colab notebook, and LICENSE all pointed to `SawitProject/rvc` instead of `uziproj/rvc`
+- **Hop-length tip wrong**: docs claimed default was `128`; actual default is `64`
 
 For the complete list, see [DOCUMENTATION.md](DOCUMENTATION.md).
 

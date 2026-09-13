@@ -50,6 +50,7 @@ dependencies = [
     "matplotlib>=3.7.2",
     "gradio",
     "yt-dlp",
+    "tqdm>=4.65.0",
     "onnxruntime; sys_platform == 'darwin'",
     "onnxruntime-gpu; sys_platform != 'darwin'",
     "edge-tts>=7.2.7",
@@ -81,9 +82,9 @@ rvc = "rvc.infer.cli:main"
 rvc-api = "rvc.api.app:main"
 
 [project.urls]
-Homepage = "https://github.com/SawitProject/rvc"
-Repository = "https://github.com/SawitProject/rvc.git"
-Issues = "https://github.com/SawitProject/rvc/issues"
+Homepage = "https://github.com/uziproj/rvc"
+Repository = "https://github.com/uziproj/rvc.git"
+Issues = "https://github.com/uziproj/rvc/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]

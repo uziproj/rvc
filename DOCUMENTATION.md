@@ -289,7 +289,7 @@ adjusted_f0 = autotuner.autotune_f0(original_f0, f0_autotune_strength=0.8)
 
 A ready-to-run Colab notebook is available for quick testing without local installation:
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/SawitProject/rvc/blob/main/colab/rvc_demo.ipynb)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/uziproj/rvc/blob/main/colab/rvc_demo.ipynb)
 
 The notebook includes:
 - Automatic installation of RVC and dependencies
@@ -671,6 +671,70 @@ If a model file is not found locally, it is automatically downloaded from Huggin
 - **Description**: `for k, v in cookies:` assumed the JSON file stores cookies as a list of pairs `[[key, val], ...]`. Standard browser cookie exports typically use dict format `{"key": val}`.
 - **Fix**: Added `isinstance(cookies, dict)` check to handle both dict and list formats.
 
+### Packaging & Documentation Fixes (v0.1.1)
+
+These bugs were discovered while auditing the package for v0.1.1. They prevented the package from importing at all, made the CLI entry point crash, or caused documentation examples to fail.
+
+#### BUG 24: `rvc/__init__.py` uses non-existent `infer.*` import paths
+- **File**: `rvc/__init__.py`
+- **Description**: The package init used `from infer.cli import ...` and `from infer.infer import infer_main`. There is no top-level `infer` package — the modules live under `rvc.infer.*`. As a result, `import rvc` raised `ModuleNotFoundError: No module named 'infer'`, breaking every entry point (`rvc`, `rvc-api`) and every documented Python import path.
+- **Fix**: Changed imports to `from rvc.infer.cli import ...` and `from rvc.infer.infer import infer_main`.
+
+#### BUG 25: `run_inference_script` referenced in docs but never defined
+- **Files**: `README.md`, `DOCUMENTATION.md`, `colab/rvc_demo.ipynb`, `rvc/__init__.py`
+- **Description**: All user-facing documentation tells users to call `from rvc.infer.infer import run_inference_script`, but the function defined in `infer.py` is `infer_main`. Every documented Python example would crash with `ImportError`.
+- **Fix**: Added a backwards-compatible alias `run_inference_script = infer_main` in `rvc/__init__.py`, `rvc/infer/__init__.py`, and `rvc/infer/infer.py`. Both names now resolve to the same callable; existing scripts that used `infer_main` keep working.
+
+#### BUG 26: `rvc --version` crashes with `ImportError`
+- **File**: `rvc/infer/cli.py`
+- **Description**: The `--version` handler did `from rvc.infer import __version__`, but `__version__` is defined in `rvc/__init__.py`, not in `rvc.infer`. Running `rvc --version` raised `ImportError`.
+- **Fix**: Changed the import to `from rvc import __version__`. Also created a proper `rvc/infer/__init__.py` so the sub-package is a regular package (not an implicit namespace package).
+
+#### BUG 27: Missing `rvc/infer/__init__.py` and `rvc/lib/__init__.py`
+- **Files**: `rvc/infer/__init__.py` (missing), `rvc/lib/__init__.py` (missing)
+- **Description**: Both sub-directories had only stale `__pycache__/__init__.cpython-312.pyc` files left over from a previous version; the source `__init__.py` had been deleted. This forced Python to use implicit namespace packages, which (a) is unreliable under certain packaging setups and (b) prevents the sub-package from exposing its own `__version__` / public API.
+- **Fix**: Added `rvc/infer/__init__.py` (exposing `infer_main`, `run_inference_script`, `VoiceConverter`). Added an empty `rvc/lib/__init__.py`.
+
+#### BUG 28: `__version__` / `__author__` mismatch with `pyproject.toml`
+- **File**: `rvc/__init__.py`
+- **Description**: `__version__ = "1.0.0"` and `__author__ = "BF667"` did not match `pyproject.toml` (`version = "0.1.0"`, `authors = [{name = "uziproj"}]`). `pip show rvc` and `python -c "import rvc; print(rvc.__version__)"` reported different versions, which confuses dependency resolvers and downstream tooling.
+- **Fix**: Aligned both to the values in `pyproject.toml` (`0.1.0` / `uziproj`).
+
+#### BUG 29: `clean_strength` default diverges between CLI and class
+- **Files**: `rvc/infer/cli.py` (`VoiceConverter.convert_audio`), `rvc/infer/infer.py` (`VoiceConverter.convert_audio`)
+- **Description**: The CLI `argparse` default for `-cs` was `0.7`, but the underlying `VoiceConverter.convert_audio` method defaulted `clean_strength=0.5`. Calling the class directly from Python (as documented in the Python API section) produced noticeably weaker noise reduction than calling via CLI for the same audio.
+- **Fix**: Aligned both class defaults to `0.7` to match the CLI and the README/DOCUMENTATION tables.
+
+#### BUG 30: Missing `tqdm` dependency declaration
+- **Files**: `pyproject.toml`, `requirements.txt`
+- **Description**: `rvc/utils.py` and `rvc/tools/gdown.py` both do `from tqdm import tqdm`, but `tqdm` is not declared in `pyproject.toml` or `requirements.txt`. The import only worked because `tqdm` happens to be a transitive dependency of `gradio` / `transformers`. A clean install with `--no-deps` would crash on the first model download attempt.
+- **Fix**: Added `tqdm>=4.65.0` to both `pyproject.toml` (main `dependencies`) and `requirements.txt`.
+
+#### BUG 31: `requirements.txt` missing API dependencies
+- **File**: `requirements.txt`
+- **Description**: `requirements.txt` did not list `fastapi`, `uvicorn`, or `python-multipart`, even though the `rvc-api` entry point requires all three. Users installing from `requirements.txt` (the conventional `pip install -r requirements.txt` workflow) could not start the API server.
+- **Fix**: Added `fastapi>=0.100.0`, `uvicorn>=0.23.0`, `python-multipart>=0.0.6` to `requirements.txt`.
+
+#### BUG 32: Unused dependencies in `requirements.txt`
+- **File**: `requirements.txt`
+- **Description**: `tkinter-embed` and `customtkinter` were declared but never imported anywhere in the codebase (verified with `grep -r`). They added ~30 MB of unnecessary install weight and pulled in a system-level Tk dependency that breaks headless / server installs.
+- **Fix**: Removed both from `requirements.txt`.
+
+#### BUG 33: `pyproject.toml` URLs point to wrong GitHub organization
+- **File**: `pyproject.toml`
+- **Description**: `[project.urls]` pointed to `github.com/SawitProject/rvc` for Homepage / Repository / Issues, but the canonical repo is `github.com/uziproj/rvc`. `pip show rvc -v` displayed broken links.
+- **Fix**: Updated all three URLs to `https://github.com/uziproj/rvc`.
+
+#### BUG 34: Documentation references wrong GitHub URL
+- **Files**: `README.md`, `DOCUMENTATION.md`, `colab/rvc_demo.ipynb`, `LICENSE`
+- **Description**: Multiple badges, install commands, and "see the documentation" links pointed to `github.com/SawitProject/rvc`. The Colab badge, the troubleshooting install snippet, the Colab notebook footer, and the LICENSE copyright notice were all affected.
+- **Fix**: Replaced every `SawitProject/rvc` occurrence with `uziproj/rvc`.
+
+#### BUG 35: DOCUMENTATION.md hop_length tip was misleading
+- **File**: `DOCUMENTATION.md`
+- **Description**: Performance Tips section said "Use `-hl 128` (default hop length) for best quality; increase for faster processing". This was double-wrong: (1) the actual default is `64`, not `128`; (2) the relationship is inverted — *increasing* `-hl` makes pitch extraction faster and lower quality, not the other way around.
+- **Fix**: Rewrote to "Use `-hl 128` for higher-quality pitch extraction (default is `64`; increase to trade speed for accuracy)".
+
 ## Troubleshooting
 
 ### Common Issues
@@ -682,7 +746,7 @@ If a model file is not found locally, it is automatically downloaded from Huggin
   python -m venv venv
   source venv/bin/activate  # Linux/macOS
   venv\Scripts\activate     # Windows
-  pip install git+https://github.com/SawitProject/rvc.git
+  pip install git+https://github.com/uziproj/rvc.git
   ```
 
 - **Problem**: PyTorch installation fails
@@ -721,7 +785,7 @@ If a model file is not found locally, it is automatically downloaded from Huggin
   - Fastest: PM, DIO
   - Balanced: Harvest, SWIPE
   - Highest Quality: RMVPE, CREPE (larger models)
-- Use `-hl 128` (default hop length) for best quality; increase for faster processing
+- Use `-hl 128` for higher-quality pitch extraction (default is `64`; increase to trade speed for accuracy)
 
 ## Contributing
 
