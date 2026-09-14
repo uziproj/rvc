@@ -56,6 +56,7 @@ class RVClass:
         sid=0,
         embedder_model="contentvec_base",
         f0_method="rmvpe",
+        log_level=None,
     ):
         """Initialize the converter and load the voice model.
 
@@ -66,7 +67,19 @@ class RVClass:
             sid: Speaker ID (for multi-speaker models).
             embedder_model: Embedder model name (used for predictor checks).
             f0_method: F0 method name (used for predictor checks).
+            log_level: Optional override for the log level. Accepts
+                ``"debug"``, ``"info"``, ``"warning"``, ``"error"``,
+                ``"critical"``, or a ``logging`` level integer. If
+                ``None``, inherits whatever was set on ``config``.
         """
+        # Apply log level override before any heavy work starts
+        if log_level is not None:
+            from rvc.lib.logging import set_log_level
+            set_log_level(log_level)
+
+        from rvc.lib.logging import get_logger
+        self._logger = get_logger("RVClass")
+
         check_predictors(f0_method)
         check_embedders(embedder_model)
 
@@ -82,6 +95,7 @@ class RVClass:
         self.embedder_model = embedder_model
         self.f0_method = f0_method
 
+        self._logger.info(f"Loading voice model: {pth_path}")
         # VoiceConverter handles the actual model loading + inference.
         self._converter = VoiceConverter(config, pth_path, sid)
 

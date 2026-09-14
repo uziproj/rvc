@@ -364,6 +364,90 @@ autotuner = Autotune(ref_freqs)
 adjusted_f0 = autotuner.autotune_f0(original_f0, f0_autotune_strength=0.8)
 ```
 
+## Logging
+
+RVC uses a centralized logging system exposed at the top level. Log verbosity
+is controlled via the `log_level` parameter on `Config`, the `log_level`
+parameter on `RVClass`, or the standalone `set_log_level()` function.
+
+### Supported levels
+
+| Level | Numeric | When to use |
+|-------|---------|-------------|
+| `debug` | 10 | Verbose diagnostics (GPU cache clears, intermediate state) |
+| `info` | 20 | Default — high-level progress (model loads, conversions) |
+| `warning` | 30 | Only warnings and errors (quiet mode) |
+| `error` | 40 | Only errors (very quiet) |
+| `critical` | 50 | Only critical failures |
+
+### Configuring via Config (recommended)
+
+```python
+from rvc import Config
+
+# At construction time
+config = Config(log_level="debug")
+
+# Change at runtime
+config.set_log_level("warning")
+```
+
+### Configuring via RVClass
+
+`RVClass` accepts an optional `log_level` that overrides whatever `Config`
+set:
+
+```python
+from rvc import Config, RVClass
+
+config = Config(log_level="info")
+rvc = RVClass(config=config, pth_path="model.pth", log_level="debug")
+# now logs at debug level for the lifetime of this RVClass instance
+```
+
+### Configuring via the standalone API
+
+```python
+from rvc import set_log_level, get_log_level, get_logger, LOG_LEVELS
+
+set_log_level("debug")
+print(get_log_level())      # 'debug'
+print(LOG_LEVELS)            # full name -> integer mapping
+
+# Get a sub-logger for your own code (under the 'rvc' namespace)
+logger = get_logger("my_app")
+logger.info("Hello from my app")
+# 2026-09-14 02:54:42 [INFO] rvc.my_app: Hello from my app
+```
+
+### Output format
+
+All log lines use a single consistent format (no more duplicate output):
+
+```
+2026-09-14 02:54:42 [INFO] rvc.utils: Hubert model 'contentvec_base' loaded on cuda:0.
+2026-09-14 02:54:42 [WARNING] rvc.config: RMVPE model not found, skipping load.
+2026-09-14 02:54:42 [ERROR] rvc.infer.infer: Conversion failed: out of memory
+```
+
+When stderr is a TTY, the level name (`INFO`/`WARNING`/etc.) is colored
+automatically — cyan for DEBUG, green for INFO, yellow for WARNING, red
+for ERROR, magenta for CRITICAL. Disable colors with
+`set_log_level("info", use_color=False)`.
+
+### Internal usage from RVC modules
+
+All RVC sub-modules should use `get_logger()` instead of
+`logging.getLogger(__name__)` so the centralized formatter and propagation
+settings are respected:
+
+```python
+from rvc.lib.logging import get_logger
+
+logger = get_logger("utils")   # becomes "rvc.utils"
+logger.info("Doing something")
+```
+
 ## Google Colab
 
 A ready-to-run Colab notebook is available for quick testing without local installation:
@@ -830,6 +914,18 @@ These bugs were discovered while auditing the package for v0.1.1. They prevented
           rvc.run(input_path="./audio_folder", pitch=12)  # auto batch
 
   The model is loaded once in `__init__` and reused for every `.run()` / `.convert()` / `.convert_batch()` call. Added context-manager support (`with RVClass(...) as rvc:`) for automatic GPU cleanup. `infer_main` / `run_inference_script` are kept as thin backwards-compatible wrappers that instantiate `RVClass` and call `.run()` — old code keeps working unchanged. README / DOCUMENTATION / Colab notebook were updated to use the class form as the recommended pattern.
+
+#### BUG 38: Duplicate log output + GPU-cache-clear spam
+- **Files**: `rvc/utils.py`, `rvc/api/app.py`, `rvc/lib/config.py`, `rvc/infer/infer.py`, new `rvc/lib/logging.py`
+- **Description**: Two distinct logging bugs:
+  1. **Duplicate output**: `rvc/utils.py` attached its own `StreamHandler` (format `"%(levelname)s - %(message)s"`) to the `rvc.utils` logger, while `rvc/api/app.py` called `logging.basicConfig()` which installed a handler on the **root** logger. Because `logger.propagate` defaults to `True`, every log call was emitted **twice** — once by utils' own handler (e.g. `INFO - GPU cache cleared successfully`) and once by the root handler (e.g. `INFO:rvc.utils:GPU cache cleared successfully`). Output was unreadable.
+  2. **Spammy INFO logs**: `clear_gpu_cache()` logged `"GPU cache cleared successfully"` at `INFO` level, but it's called many times per conversion (once per chunk + once per pipeline call + once per cleanup). A 20-file batch conversion with chunking produced 200+ identical INFO lines, drowning out useful output.
+- **Fix**:
+  - Created `rvc/lib/logging.py` with a centralized logger. The `rvc` root logger has `propagate=False` so messages never bubble up to Python's root logger. Calling `set_log_level()` removes any existing handlers before adding a fresh one, so re-configuration never produces duplicates.
+  - Switched `rvc/utils.py`, `rvc/api/app.py`, and `rvc/lib/config.py` to use `from rvc.lib.logging import get_logger` instead of `logging.getLogger(__name__)` / `logging.basicConfig()`.
+  - Demoted `clear_gpu_cache()`'s success message from `INFO` to `DEBUG`. Users who want verbose cache-clear logging can `set_log_level("debug")`.
+  - Added `log_level` parameter to `Config.__init__()` and `RVClass.__init__()` so users can control verbosity at construction time. Added a `Config.set_log_level()` runtime method.
+  - Exposed `get_logger`, `set_log_level`, `get_log_level`, `LOG_LEVELS` at the top level (`from rvc import set_log_level`).
 
 ## Troubleshooting
 

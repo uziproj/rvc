@@ -33,15 +33,15 @@ from rvc.infer.cli import VoiceConverter
 from rvc.lib.config import Config
 from rvc.utils import check_embedders, check_predictors
 from rvc.var import method as F0_METHODS
+from rvc.lib.logging import get_logger
 
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-)
-logger = logging.getLogger("rvc.api")
+# Use the centralized RVC logger. Do NOT call logging.basicConfig() here —
+# that would install a handler on the root logger, which combined with
+# rvc.utils' own handler produced the duplicate-output bug.
+logger = get_logger("api")
 
 # ---------------------------------------------------------------------------
 # Globals

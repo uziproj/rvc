@@ -57,6 +57,9 @@ from rvc.utils import (
     HF_download_file,
 )
 
+# --- Logging -------------------------------------------------------------
+from rvc.lib.logging import get_logger, set_log_level, get_log_level, LOG_LEVELS
+
 # --- F0 methods list -----------------------------------------------------
 from rvc.var import method as F0_METHODS
 
@@ -85,6 +88,11 @@ __all__ = [
     "clear_gpu_cache",
     "change_rms",
     "HF_download_file",
+    # Logging
+    "get_logger",
+    "set_log_level",
+    "get_log_level",
+    "LOG_LEVELS",
     # F0
     "F0_METHODS",
 ]

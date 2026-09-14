@@ -19,7 +19,21 @@ def singleton(cls):
 
 @singleton
 class Config:
-    def __init__(self, cpu_mode=False, is_half=False, embedder_model="contentvec_base", f0_method="rmvpe"):
+    def __init__(
+        self,
+        cpu_mode=False,
+        is_half=False,
+        embedder_model="contentvec_base",
+        f0_method="rmvpe",
+        log_level="info",
+        use_color=None,
+    ):
+        # Configure logging FIRST so all subsequent init messages respect
+        # the requested level. This is the single source of truth for
+        # RVC's log verbosity — see rvc.lib.logging for details.
+        from rvc.lib.logging import set_log_level
+        set_log_level(log_level, use_color=use_color)
+
         self.device = "cuda:0" if torch.cuda.is_available() else ("ocl:0" if opencl.is_available() else "cpu")
         self.is_half = is_half
         self.gpu_mem = None
@@ -27,6 +41,7 @@ class Config:
         if cpu_mode: self.device = "cpu"
         self.embedder_model = embedder_model
         self.f0_method = f0_method
+        self.log_level = log_level
 
         # Load hubert and rmvpe models at config initialization
         self.hubert_model = None
@@ -39,19 +54,22 @@ class Config:
         try:
             from rvc.utils import check_embedders
             from rvc.lib.embedders import fairseq
+            from rvc.lib.logging import get_logger
+            logger = get_logger("config")
 
             check_embedders(embedder_model)
 
             embedder_model_path = os.path.join(os.getcwd(), "assets", "models", embedder_model + ".pt")
             if not os.path.exists(embedder_model_path):
-                print(f"[WARNING] Hubert model not found at {embedder_model_path}, skipping load.")
+                logger.warning(f"Hubert model not found at {embedder_model_path}, skipping load.")
                 return
 
             model = fairseq.load_model(embedder_model_path).to(self.device).eval()
             self.hubert_model = model.half() if self.is_half else model.float()
-            print(f"[INFO] Hubert model '{embedder_model}' loaded on {self.device}.")
+            logger.info(f"Hubert model '{embedder_model}' loaded on {self.device}.")
         except Exception as e:
-            print(f"[WARNING] Failed to load hubert model: {e}")
+            from rvc.lib.logging import get_logger
+            get_logger("config").warning(f"Failed to load hubert model: {e}")
             self.hubert_model = None
 
     def _load_rmvpe(self, f0_method):
@@ -59,22 +77,24 @@ class Config:
         try:
             from rvc.utils import check_predictors
             from rvc.lib.predictor.rmvpe import RMVPE
+            from rvc.lib.logging import get_logger
+            logger = get_logger("config")
 
             # Check and download if needed
             check_predictors(f0_method)
 
             rmvpe_model_path = os.path.join(PREDICTOR_MODEL, "rmvpe.pt")
             if not os.path.exists(rmvpe_model_path):
-                print(f"[WARNING] RMVPE model not found at {rmvpe_model_path}, skipping load.")
+                logger.warning(f"RMVPE model not found at {rmvpe_model_path}, skipping load.")
                 return
 
             self.rmvpe_model = RMVPE(rmvpe_model_path, is_half=self.is_half, device=self.device)
-            print(f"[INFO] RMVPE model loaded on {self.device}.")
+            logger.info(f"RMVPE model loaded on {self.device}.")
         except Exception as e:
-            print(f"[WARNING] Failed to load RMVPE model: {e}")
+            from rvc.lib.logging import get_logger
+            get_logger("config").warning(f"Failed to load RMVPE model: {e}")
             self.rmvpe_model = None
 
-    # INDENTATION FIXED: This method must be inside the class
     def device_config(self):
         if not self.cpu_mode:
             if self.device.startswith("cuda"): 
@@ -95,11 +115,21 @@ class Config:
             return 1, 5, 30, 32
         return (3, 10, 60, 65) if self.is_half else (1, 6, 38, 41)
 
-    # INDENTATION FIXED
     def set_cuda_config(self):
         i_device = int(self.device.split(":")[-1])
         self.gpu_mem = torch.cuda.get_device_properties(i_device).total_memory // (1024**3)
 
-    # INDENTATION FIXED
     def has_mps(self):
         return torch.backends.mps.is_available()
+
+    def set_log_level(self, level, use_color=None):
+        """Change the log level at runtime.
+
+        Args:
+            level: 'debug', 'info', 'warning', 'error', 'critical',
+                   or a logging level integer.
+            use_color: Force-enable/disable ANSI colors.
+        """
+        from rvc.lib.logging import set_log_level, get_log_level
+        set_log_level(level, use_color=use_color)
+        self.log_level = get_log_level()

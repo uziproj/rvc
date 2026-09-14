@@ -10,19 +10,12 @@ import soundfile as sf
 import torch.nn.functional as F
 from tqdm import tqdm
 
-# Setup logging configuration
-logger = logging.getLogger(__name__)
+# Use the centralized RVC logger instead of configuring a custom handler.
+# This fixes the duplicate-output bug where every log line appeared twice
+# (once from utils' own StreamHandler, once from the root logger).
+from rvc.lib.logging import get_logger
 
-# Configure handler if not already configured
-if not logger.handlers:
-    handler = logging.StreamHandler()
-    formatter = logging.Formatter(
-        fmt="%(levelname)s - %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S"
-    )
-    handler.setFormatter(formatter)
-    logger.addHandler(handler)
-    logger.setLevel(logging.INFO)
+logger = get_logger("utils")
 
 # Import RVC modules - these will work when the package is installed via pip
 from rvc.lib.backend import opencl
@@ -78,23 +71,30 @@ def change_rms(source_audio, source_rate, target_audio, target_rate, rate):
 
 def clear_gpu_cache():
     """Clear GPU cache and perform garbage collection"""
-    logger.debug("Starting GPU cache clearing and garbage collection")
+    logger.debug("Clearing GPU cache and running garbage collection")
     
     try:
         gc.collect()
-        logger.debug("Garbage collection completed")
         
+        cleared_something = False
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-            logger.debug("CUDA cache cleared")
+            cleared_something = True
         elif torch.backends.mps.is_available():
             torch.mps.empty_cache()
-            logger.debug("MPS cache cleared")
+            cleared_something = True
         elif opencl.is_available():
             opencl.pytorch_ocl.empty_cache()
-            logger.debug("OpenCL cache cleared")
-            
-        logger.info("GPU cache cleared successfully")
+            cleared_something = True
+        
+        # Demoted from INFO to DEBUG — this is called many times per
+        # conversion (once per chunk + once per pipeline call + once per
+        # cleanup), so logging at INFO produced dozens of identical lines.
+        # Users who want the verbose output can set log_level="debug".
+        if cleared_something:
+            logger.debug("GPU cache cleared successfully")
+        else:
+            logger.debug("No GPU cache to clear (CPU mode)")
         
     except Exception as e:
         logger.error(f"Failed to clear GPU cache: {e}")
