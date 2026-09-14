@@ -36,7 +36,7 @@ __email__ = ""
 from rvc.infer.cli import main, convert_audio, VoiceConverter
 
 # --- Python API ----------------------------------------------------------
-from rvc.infer.infer import infer_main
+from rvc.infer.infer import infer_main, RVClass
 
 # Backwards-compatible alias: README / DOCUMENTATION / Colab notebook
 # all reference `run_inference_script`. Both names resolve to the same
@@ -72,6 +72,7 @@ __all__ = [
     # Python API
     "infer_main",
     "run_inference_script",
+    "RVClass",
     # Config & inference
     "Config",
     "PREDICTOR_MODEL",

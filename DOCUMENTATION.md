@@ -217,16 +217,17 @@ the library is the explicit form (pick only what you need) or the wildcard form
 (`from rvc import *`) when experimenting:
 
 ```python
-from rvc import Config, run_inference_script, VoiceConverter, Generator, Autotune, F0_METHODS, load_audio
+from rvc import Config, RVClass, run_inference_script, VoiceConverter, Generator, Autotune, F0_METHODS, load_audio
 # or, equivalently:
 # from rvc import *
 ```
 
 | Symbol | Source module | Purpose |
 |--------|---------------|---------|
+| `RVClass` | `rvc.infer.infer` | **Recommended high-level class** — load model once, convert many times |
+| `run_inference_script` / `infer_main` | `rvc.infer.infer` | One-shot functional wrapper around `RVClass` (backwards-compat) |
 | `Config` | `rvc.lib.config` | Device + eager model loading configuration |
-| `run_inference_script` / `infer_main` | `rvc.infer.infer` | One-shot voice conversion |
-| `VoiceConverter` | `rvc.infer.cli` | Stateful converter (load model once, convert many) |
+| `VoiceConverter` | `rvc.infer.cli` | Low-level stateful converter (used internally by `RVClass`) |
 | `Pipeline` | `rvc.infer.pipeline` | Low-level inference pipeline |
 | `Generator` | `rvc.lib.predictor.generator` | F0/pitch extraction dispatcher |
 | `Autotune` | `rvc.utils` | Snap F0 contour to musical scale |
@@ -242,12 +243,60 @@ asks for it. To use the REST API, import it directly:
 from rvc.api.app import app, main as api_main
 ```
 
-### Basic Inference
+### Class-based inference (recommended)
+
+`RVClass` is the cleanest way to use the library — load the model once in
+the constructor, then call `.run()` as many times as you need. Single-file
+vs. batch conversion is auto-detected from the `input_path` argument.
+
+```python
+from rvc import Config, RVClass
+
+# Hubert and RMVPE models are preloaded at Config initialization
+config = Config(embedder_model="contentvec_base", f0_method="rmvpe")
+
+# Load the voice model once
+with RVClass(config=config, pth_path="model.pth") as rvc:
+    # Single file
+    rvc.run(input_path="input.wav", output_path="output.wav", pitch=12, f0_method="rmvpe")
+
+    # Batch (auto-detected from directory input)
+    rvc.run(input_path="./audio_folder", pitch=12, f0_method="rmvpe")
+
+    # Or call the specific methods directly:
+    rvc.convert(input_path="in.wav", output_path="out.wav", pitch=12)
+    rvc.convert_batch(input_dir="./audio_folder", pitch=12)
+```
+
+The `with` statement (context manager) ensures GPU memory is released when
+you're done. If you don't use `with`, call `rvc.cleanup()` manually when
+finished.
+
+#### `RVClass` API reference
+
+| Method | Description |
+|--------|-------------|
+| `RVClass(config, pth_path, sid=0, embedder_model=..., f0_method=...)` | Load the voice model into memory |
+| `rvc.run(input_path, output_path="./output.wav", **kwargs)` | Auto-dispatch: batch if `input_path` is a directory, else single |
+| `rvc.convert(input_path, output_path="./output.wav", **kwargs)` | Single-file conversion |
+| `rvc.convert_batch(input_dir, **kwargs)` | Batch conversion of every audio file in `input_dir` |
+| `rvc.cleanup()` | Free GPU memory |
+| `with RVClass(...) as rvc:` | Context-manager form — auto-cleanup on exit |
+
+All `**kwargs` are the same conversion parameters documented in the
+[Command-Line Interface](#command-line-interface) section (`pitch`,
+`f0_method`, `index_path`, `index_rate`, `clean_audio`, `formant_shifting`,
+etc.).
+
+### Function-based inference (backwards-compatible)
+
+The original functional API still works — `run_inference_script` /
+`infer_main` are now thin wrappers that instantiate `RVClass` and call
+`.run()` internally:
+
 ```python
 from rvc import Config, run_inference_script
 
-# Hubert and RMVPE models are preloaded at Config initialization
-# Pass embedder_model and f0_method to specify which models to load eagerly
 config = Config(embedder_model="contentvec_base", f0_method="rmvpe")
 
 run_inference_script(
@@ -260,7 +309,10 @@ run_inference_script(
 )
 ```
 
-### Using VoiceConverter Directly
+### Using VoiceConverter Directly (low-level)
+
+For maximum control, drop down to the underlying `VoiceConverter` class:
+
 ```python
 from rvc import Config, VoiceConverter
 
@@ -766,6 +818,18 @@ These bugs were discovered while auditing the package for v0.1.1. They prevented
 - **Files**: `rvc/__init__.py`, `README.md`, `DOCUMENTATION.md`, `colab/rvc_demo.ipynb`
 - **Description**: Every documented Python example used verbose deep imports like `from rvc.infer.infer import run_inference_script`, `from rvc.lib.config import Config`, `from rvc.lib.predictor.generator import Generator`, `from rvc.utils import Autotune`. This made the public API look more cluttered than it actually is, and forced users to memorize the internal package layout just to get started. The top-level `rvc/__init__.py` only re-exported `main`, `convert_audio`, `VoiceConverter`, and `infer_main` — so even `from rvc import Config` failed with `ImportError`.
 - **Fix**: Re-exported all public symbols (`Config`, `PREDICTOR_MODEL`, `Pipeline`, `Generator`, `Autotune`, `load_audio`, `check_predictors`, `check_embedders`, `clear_gpu_cache`, `change_rms`, `HF_download_file`, `F0_METHODS`) at the top level so both `from rvc import Config, run_inference_script` and `from rvc import *` work. Updated README / DOCUMENTATION / Colab notebook to use the short form throughout. The FastAPI app is intentionally kept out of the top-level namespace so `import rvc` stays lightweight.
+
+#### BUG 37: One-shot function API forced users to reload the model on every call
+- **Files**: `rvc/infer/infer.py`, `rvc/__init__.py`, `rvc/infer/__init__.py`, `README.md`, `DOCUMENTATION.md`, `colab/rvc_demo.ipynb`
+- **Description**: The only documented Python API was the function `run_inference_script(config=..., input_path=..., output_path=..., pth_path=..., ...)`. The function re-loaded the `.pth` voice model on every call, which (a) wasted 1–3 seconds per call on a cold GPU, (b) made batch workflows awkward (user had to call the function once per file), and (c) didn't match the natural mental model of "create a converter once, run it many times". There was no class-based API at the public level — `VoiceConverter` was technically a class but its constructor + `.convert_audio()` signature required 15+ positional args, which is far from ergonomic.
+- **Fix**: Introduced a new high-level class `RVClass` that wraps `VoiceConverter`. Users now write:
+
+      from rvc import Config, RVClass
+      with RVClass(config=config, pth_path="model.pth") as rvc:
+          rvc.run(input_path="in.wav", output_path="out.wav", pitch=12)
+          rvc.run(input_path="./audio_folder", pitch=12)  # auto batch
+
+  The model is loaded once in `__init__` and reused for every `.run()` / `.convert()` / `.convert_batch()` call. Added context-manager support (`with RVClass(...) as rvc:`) for automatic GPU cleanup. `infer_main` / `run_inference_script` are kept as thin backwards-compatible wrappers that instantiate `RVClass` and call `.run()` — old code keeps working unchanged. README / DOCUMENTATION / Colab notebook were updated to use the class form as the recommended pattern.
 
 ## Troubleshooting
 

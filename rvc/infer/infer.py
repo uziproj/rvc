@@ -16,143 +16,336 @@ from rvc.tools.cut import cut, restore
 from rvc.infer.pipeline import Pipeline
 from rvc.utils import clear_gpu_cache, check_predictors, check_embedders, load_audio
 from rvc.lib.algorithm.synthesizers import Synthesizer
-from rvc.lib.config import Config 
+from rvc.lib.config import Config
 
 # Configure logging to silence noisy libraries
 for l in ["torch", "faiss", "omegaconf", "httpx", "httpcore", "faiss.loader", "numba.core", "urllib3", "transformers", "matplotlib"]:
     logging.getLogger(l).setLevel(logging.ERROR)
 
-def infer_main(
-    config,
-    pitch=0, 
-    filter_radius=3, 
-    index_rate=0.5, 
-    volume_envelope=1, 
-    protect=0.5, 
-    hop_length=64, 
-    f0_method="rmvpe", 
-    input_path=None, 
-    output_path="./output.wav", 
-    pth_path=None, 
-    index_path=None, 
-    export_format="wav", 
-    embedder_model="contentvec_base", 
-    resample_sr=0,  
-    f0_autotune=False, 
-    f0_autotune_strength=1, 
-    split_audio=False,
-    clean_audio=False, 
-    clean_strength=0.7,
-    formant_shifting=False,
-    formant_qfrency=0.8, 
-    formant_timbre=0.8, 
-    proposal_pitch=False, 
-    proposal_pitch_threshold=255.0
-):
-    check_predictors(f0_method); check_embedders(embedder_model)
-    
-    if not pth_path or not os.path.exists(pth_path) or os.path.isdir(pth_path) or not pth_path.endswith(".pth"):
-        print("[WARNING] Please enter a valid model.")
-        return
 
-    cvt = VoiceConverter(config, pth_path, 0)
+# Supported audio extensions for batch conversion.
+_AUDIO_EXTS = ("wav", "mp3", "flac", "ogg", "opus", "m4a", "mp4",
+               "aac", "alac", "wma", "aiff", "webm", "ac3")
 
-    if os.path.isdir(input_path):
-        print("[INFO] Use batch conversion...")
-        audio_files = [f for f in os.listdir(input_path) if f.lower().endswith(("wav", "mp3", "flac", "ogg", "opus", "m4a", "mp4", "aac", "alac", "wma", "aiff", "webm", "ac3"))]
 
-        if not audio_files: 
-            print("[WARNING] No audio files found.")
-            return
+class RVClass:
+    """High-level RVC inference interface.
 
-        print(f"[INFO] Found {len(audio_files)} audio files for conversion.")
+    Wraps the lower-level :class:`VoiceConverter` so user code can stay short:
 
-        for audio in audio_files:
-            audio_path = os.path.join(input_path, audio)
-            output_audio = os.path.join(input_path, os.path.splitext(audio)[0] + f"_output.{export_format}")
+        from rvc import Config, RVClass
 
-            print(f"[INFO] Conversion '{audio_path}'...")
-            if os.path.exists(output_audio): os.remove(output_audio)
+        config = Config(embedder_model="contentvec_base", f0_method="rmvpe")
+        rvc = RVClass(config=config, pth_path="model.pth")
 
-            cvt.convert_audio(
-                audio_input_path=audio_path, 
-                audio_output_path=output_audio, 
-                index_path=index_path, 
-                embedder_model=embedder_model, 
-                pitch=pitch, 
-                f0_method=f0_method, 
-                index_rate=index_rate, 
-                volume_envelope=volume_envelope, 
-                protect=protect, 
-                hop_length=hop_length, 
-                filter_radius=filter_radius, 
-                export_format=export_format, 
-                resample_sr=resample_sr, 
-                f0_autotune=f0_autotune, 
-                f0_autotune_strength=f0_autotune_strength,
-                split_audio=split_audio,
-                clean_audio=clean_audio,
-                clean_strength=clean_strength,
-                formant_shifting=formant_shifting,
-                formant_qfrency=formant_qfrency, 
-                formant_timbre=formant_timbre,
-                proposal_pitch=proposal_pitch,
-                proposal_pitch_threshold=proposal_pitch_threshold
+        # single file
+        rvc.convert(input_path="in.wav", output_path="out.wav", pitch=12)
+
+        # or auto-detect (batch if input is a directory)
+        rvc.run(input_path="in.wav", output_path="out.wav", pitch=12)
+        rvc.run(input_path="./audio_folder", pitch=12)
+
+    The model is loaded once at ``__init__`` and reused for every call to
+    :meth:`convert`, :meth:`convert_batch`, or :meth:`run`.
+    """
+
+    def __init__(
+        self,
+        config,
+        pth_path,
+        sid=0,
+        embedder_model="contentvec_base",
+        f0_method="rmvpe",
+    ):
+        """Initialize the converter and load the voice model.
+
+        Args:
+            config: A :class:`rvc.lib.config.Config` instance. Hubert and
+                RMVPE models are expected to be preloaded there.
+            pth_path: Path to the ``.pth`` voice model file.
+            sid: Speaker ID (for multi-speaker models).
+            embedder_model: Embedder model name (used for predictor checks).
+            f0_method: F0 method name (used for predictor checks).
+        """
+        check_predictors(f0_method)
+        check_embedders(embedder_model)
+
+        if not pth_path or not os.path.exists(pth_path) \
+                or os.path.isdir(pth_path) or not pth_path.endswith(".pth"):
+            raise FileNotFoundError(
+                f"[ERROR] Please enter a valid model path (.pth): {pth_path!r}"
             )
 
-        print("[INFO] Conversion complete.")
-    else:
+        self.config = config
+        self.pth_path = pth_path
+        self.sid = sid
+        self.embedder_model = embedder_model
+        self.f0_method = f0_method
+
+        # VoiceConverter handles the actual model loading + inference.
+        self._converter = VoiceConverter(config, pth_path, sid)
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+    def convert(
+        self,
+        input_path,
+        output_path="./output.wav",
+        pitch=0,
+        filter_radius=3,
+        index_rate=0.5,
+        volume_envelope=1,
+        protect=0.5,
+        hop_length=64,
+        f0_method="rmvpe",
+        index_path=None,
+        export_format="wav",
+        embedder_model="contentvec_base",
+        resample_sr=0,
+        f0_autotune=False,
+        f0_autotune_strength=1,
+        split_audio=False,
+        clean_audio=False,
+        clean_strength=0.7,
+        formant_shifting=False,
+        formant_qfrency=0.8,
+        formant_timbre=0.8,
+        proposal_pitch=False,
+        proposal_pitch_threshold=255.0,
+    ):
+        """Convert a single audio file."""
         if not os.path.exists(input_path):
             print("[WARNING] No audio files found.")
-            return
+            return False
+
+        check_predictors(f0_method)
+        check_embedders(embedder_model)
 
         print(f"[INFO] Conversion '{input_path}'...")
-        if os.path.exists(output_path): os.remove(output_path)
+        if os.path.exists(output_path):
+            os.remove(output_path)
 
-        cvt.convert_audio(
-            audio_input_path=input_path, 
-            audio_output_path=output_path, 
-            index_path=index_path, 
-            embedder_model=embedder_model, 
-            pitch=pitch, 
-            f0_method=f0_method, 
-            index_rate=index_rate, 
-            volume_envelope=volume_envelope, 
-            protect=protect, 
-            hop_length=hop_length, 
-            filter_radius=filter_radius,  
-            export_format=export_format, 
-            resample_sr=resample_sr, 
-            f0_autotune=f0_autotune, 
+        self._converter.convert_audio(
+            audio_input_path=input_path,
+            audio_output_path=output_path,
+            index_path=index_path,
+            embedder_model=embedder_model,
+            pitch=pitch,
+            f0_method=f0_method,
+            index_rate=index_rate,
+            volume_envelope=volume_envelope,
+            protect=protect,
+            hop_length=hop_length,
+            filter_radius=filter_radius,
+            export_format=export_format,
+            resample_sr=resample_sr,
+            f0_autotune=f0_autotune,
             f0_autotune_strength=f0_autotune_strength,
             split_audio=split_audio,
             clean_audio=clean_audio,
             clean_strength=clean_strength,
             formant_shifting=formant_shifting,
-            formant_qfrency=formant_qfrency, 
+            formant_qfrency=formant_qfrency,
             formant_timbre=formant_timbre,
             proposal_pitch=proposal_pitch,
-            proposal_pitch_threshold=proposal_pitch_threshold
+            proposal_pitch_threshold=proposal_pitch_threshold,
         )
 
         print("[INFO] Conversion complete.")
+        return True
+
+    def convert_batch(
+        self,
+        input_dir,
+        pitch=0,
+        filter_radius=3,
+        index_rate=0.5,
+        volume_envelope=1,
+        protect=0.5,
+        hop_length=64,
+        f0_method="rmvpe",
+        index_path=None,
+        export_format="wav",
+        embedder_model="contentvec_base",
+        resample_sr=0,
+        f0_autotune=False,
+        f0_autotune_strength=1,
+        split_audio=False,
+        clean_audio=False,
+        clean_strength=0.7,
+        formant_shifting=False,
+        formant_qfrency=0.8,
+        formant_timbre=0.8,
+        proposal_pitch=False,
+        proposal_pitch_threshold=255.0,
+    ):
+        """Batch-convert every audio file in a directory."""
+        print("[INFO] Use batch conversion...")
+        audio_files = [
+            f for f in os.listdir(input_dir)
+            if f.lower().endswith(_AUDIO_EXTS)
+        ]
+
+        if not audio_files:
+            print("[WARNING] No audio files found.")
+            return False
+
+        print(f"[INFO] Found {len(audio_files)} audio files for conversion.")
+
+        check_predictors(f0_method)
+        check_embedders(embedder_model)
+
+        for audio in audio_files:
+            audio_path = os.path.join(input_dir, audio)
+            output_audio = os.path.join(
+                input_dir,
+                os.path.splitext(audio)[0] + f"_output.{export_format}",
+            )
+
+            print(f"[INFO] Conversion '{audio_path}'...")
+            if os.path.exists(output_audio):
+                os.remove(output_audio)
+
+            self._converter.convert_audio(
+                audio_input_path=audio_path,
+                audio_output_path=output_audio,
+                index_path=index_path,
+                embedder_model=embedder_model,
+                pitch=pitch,
+                f0_method=f0_method,
+                index_rate=index_rate,
+                volume_envelope=volume_envelope,
+                protect=protect,
+                hop_length=hop_length,
+                filter_radius=filter_radius,
+                export_format=export_format,
+                resample_sr=resample_sr,
+                f0_autotune=f0_autotune,
+                f0_autotune_strength=f0_autotune_strength,
+                split_audio=split_audio,
+                clean_audio=clean_audio,
+                clean_strength=clean_strength,
+                formant_shifting=formant_shifting,
+                formant_qfrency=formant_qfrency,
+                formant_timbre=formant_timbre,
+                proposal_pitch=proposal_pitch,
+                proposal_pitch_threshold=proposal_pitch_threshold,
+            )
+
+        print("[INFO] Conversion complete.")
+        return True
+
+    def run(self, input_path, output_path="./output.wav", **kwargs):
+        """Auto-dispatch: batch if ``input_path`` is a directory, else single."""
+        if os.path.isdir(input_path):
+            # batch mode ignores output_path (per-file outputs go into input dir)
+            return self.convert_batch(input_dir=input_path, **kwargs)
+        return self.convert(input_path=input_path, output_path=output_path, **kwargs)
+
+    # ------------------------------------------------------------------
+    # Cleanup / context-manager support
+    # ------------------------------------------------------------------
+    def cleanup(self):
+        """Release GPU memory and clear internal state."""
+        self._converter.cleanup()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.cleanup()
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Backwards-compatible functional API
+# ---------------------------------------------------------------------------
+def infer_main(
+    config,
+    pitch=0,
+    filter_radius=3,
+    index_rate=0.5,
+    volume_envelope=1,
+    protect=0.5,
+    hop_length=64,
+    f0_method="rmvpe",
+    input_path=None,
+    output_path="./output.wav",
+    pth_path=None,
+    index_path=None,
+    export_format="wav",
+    embedder_model="contentvec_base",
+    resample_sr=0,
+    f0_autotune=False,
+    f0_autotune_strength=1,
+    split_audio=False,
+    clean_audio=False,
+    clean_strength=0.7,
+    formant_shifting=False,
+    formant_qfrency=0.8,
+    formant_timbre=0.8,
+    proposal_pitch=False,
+    proposal_pitch_threshold=255.0,
+):
+    """One-shot inference entry point (function-style wrapper around RVClass).
+
+    Maintained for backwards compatibility — new code should prefer
+    instantiating :class:`RVClass` directly so the model is loaded once
+    and reused across multiple conversions.
+    """
+    rvc = RVClass(
+        config=config,
+        pth_path=pth_path,
+        sid=0,
+        embedder_model=embedder_model,
+        f0_method=f0_method,
+    )
+
+    return rvc.run(
+        input_path=input_path,
+        output_path=output_path,
+        pitch=pitch,
+        filter_radius=filter_radius,
+        index_rate=index_rate,
+        volume_envelope=volume_envelope,
+        protect=protect,
+        hop_length=hop_length,
+        f0_method=f0_method,
+        index_path=index_path,
+        export_format=export_format,
+        embedder_model=embedder_model,
+        resample_sr=resample_sr,
+        f0_autotune=f0_autotune,
+        f0_autotune_strength=f0_autotune_strength,
+        split_audio=split_audio,
+        clean_audio=clean_audio,
+        clean_strength=clean_strength,
+        formant_shifting=formant_shifting,
+        formant_qfrency=formant_qfrency,
+        formant_timbre=formant_timbre,
+        proposal_pitch=proposal_pitch,
+        proposal_pitch_threshold=proposal_pitch_threshold,
+    )
+
 
 # Backwards-compatible alias: README / DOCUMENTATION / Colab notebook
 # import `run_inference_script` — keep both names pointing at the same callable.
 run_inference_script = infer_main
+
 
 class VoiceConverter:
     def __init__(self, config, model_path, sid = 0):
         self.config = config
         self.device = config.device
         self.hubert_model = None
-        self.tgt_sr = None 
-        self.net_g = None 
+        self.tgt_sr = None
+        self.net_g = None
         self.vc = None
-        self.cpt = None  
-        self.version = None 
-        self.n_spk = None  
-        self.use_f0 = None  
+        self.cpt = None
+        self.version = None
+        self.n_spk = None
+        self.use_f0 = None
         self.loaded_model = None
         self.vocoder = "Default"
         self.sample_rate = 16000
@@ -160,29 +353,29 @@ class VoiceConverter:
         self.get_vc(model_path, sid)
 
     def convert_audio(
-        self, 
-        audio_input_path, 
-        audio_output_path, 
-        index_path, 
-        embedder_model, 
-        pitch, 
-        f0_method, 
-        index_rate, 
-        volume_envelope, 
-        protect, 
-        hop_length, 
-        filter_radius, 
-        export_format, 
-        resample_sr = 0, 
-        f0_autotune=False, 
+        self,
+        audio_input_path,
+        audio_output_path,
+        index_path,
+        embedder_model,
+        pitch,
+        f0_method,
+        index_rate,
+        volume_envelope,
+        protect,
+        hop_length,
+        filter_radius,
+        export_format,
+        resample_sr = 0,
+        f0_autotune=False,
         f0_autotune_strength=1,
         split_audio=False,
         clean_audio=False,
         clean_strength=0.7,
         formant_shifting=False,
-        formant_qfrency=0.8, 
-        formant_timbre=0.8, 
-        proposal_pitch=False, 
+        formant_qfrency=0.8,
+        formant_timbre=0.8,
+        proposal_pitch=False,
         proposal_pitch_threshold=255.0
     ):
         try:
@@ -203,37 +396,37 @@ class VoiceConverter:
 
             if split_audio:
                 chunks = cut(
-                    audio, 
-                    self.sample_rate, 
-                    db_thresh=-60, 
+                    audio,
+                    self.sample_rate,
+                    db_thresh=-60,
                     min_interval=500
-                )  
+                )
                 print(f"[INFO] Split Total: {len(chunks)}")
             else: chunks = [(audio, 0, 0)]
 
             converted_chunks = [
                 (
-                    start, 
-                    end, 
+                    start,
+                    end,
                     self.vc.pipeline(
-                        model=self.hubert_model, 
-                        net_g=self.net_g, 
-                        sid=self.sid, 
-                        audio=waveform, 
-                        f0_up_key=pitch, 
-                        f0_method=f0_method, 
+                        model=self.hubert_model,
+                        net_g=self.net_g,
+                        sid=self.sid,
+                        audio=waveform,
+                        f0_up_key=pitch,
+                        f0_method=f0_method,
                         file_index=(
                             index_path.strip().strip('"').strip("\n").strip('"').strip().replace("trained", "added")
-                        ), 
-                        index_rate=index_rate, 
-                        pitch_guidance=self.use_f0, 
-                        filter_radius=filter_radius, 
-                        volume_envelope=volume_envelope, 
-                        version=self.version, 
-                        protect=protect, 
-                        hop_length=hop_length, 
+                        ),
+                        index_rate=index_rate,
+                        pitch_guidance=self.use_f0,
+                        filter_radius=filter_radius,
+                        volume_envelope=volume_envelope,
+                        version=self.version,
+                        protect=protect,
+                        hop_length=hop_length,
                         energy_use=self.energy,
-                        f0_autotune=f0_autotune, 
+                        f0_autotune=f0_autotune,
                         f0_autotune_strength=f0_autotune_strength,
                         proposal_pitch=proposal_pitch,
                         proposal_pitch_threshold=proposal_pitch_threshold
@@ -242,23 +435,23 @@ class VoiceConverter:
             ]
 
             audio_output = restore(
-                converted_chunks, 
-                total_len=len(audio), 
+                converted_chunks,
+                total_len=len(audio),
                 dtype=converted_chunks[0][2].dtype
             ) if split_audio else converted_chunks[0][2]
 
-            if self.tgt_sr != resample_sr and resample_sr > 0: 
+            if self.tgt_sr != resample_sr and resample_sr > 0:
                 audio_output = librosa.resample(audio_output, orig_sr=self.tgt_sr, target_sr=resample_sr, res_type="soxr_vhq")
                 self.tgt_sr = resample_sr
 
             if clean_audio:
                 from rvc.tools.noisereduce import reduce_noise
                 audio_output = reduce_noise(
-                    y=audio_output, 
-                    sr=self.tgt_sr, 
-                    prop_decrease=clean_strength, 
+                    y=audio_output,
+                    sr=self.tgt_sr,
+                    prop_decrease=clean_strength,
                     device=self.device
-                ) 
+                )
 
             sf.write(audio_output_path, audio_output, self.tgt_sr, format=export_format)
         except Exception as e:
@@ -287,7 +480,7 @@ class VoiceConverter:
         clear_gpu_cache()
 
     def load_model(self):
-        if os.path.isfile(self.loaded_model): self.cpt = torch.load(self.loaded_model, map_location="cpu")  
+        if os.path.isfile(self.loaded_model): self.cpt = torch.load(self.loaded_model, map_location="cpu")
         else: self.cpt = None
 
     def setup(self):
