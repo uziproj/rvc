@@ -249,19 +249,27 @@ from rvc.api.app import app, main as api_main
 the constructor, then call `.run()` as many times as you need. Single-file
 vs. batch conversion is auto-detected from the `input_path` argument.
 
+`f0_method` and `embedder_model` are **not** parameters of `RVClass.__init__()`
+or `rvc.run()` — they come from `Config` (single source of truth). You can
+still override them per-call by passing them explicitly.
+
 ```python
 from rvc import Config, RVClass
 
-# Hubert and RMVPE models are preloaded at Config initialization
+# f0_method and embedder_model are set ONCE here in Config
 config = Config(embedder_model="contentvec_base", f0_method="rmvpe")
 
-# Load the voice model once
+# RVClass inherits them — no need to repeat
 with RVClass(config=config, pth_path="model.pth") as rvc:
-    # Single file
-    rvc.run(input_path="input.wav", output_path="output.wav", pitch=12, f0_method="rmvpe")
+    # Single file — only per-conversion params here
+    rvc.run(input_path="input.wav", output_path="output.wav", pitch=12)
 
     # Batch (auto-detected from directory input)
-    rvc.run(input_path="./audio_folder", pitch=12, f0_method="rmvpe")
+    rvc.run(input_path="./audio_folder", pitch=12)
+
+    # Override f0_method for a single call only
+    rvc.run(input_path="tricky.wav", output_path="tricky_out.wav",
+            pitch=12, f0_method="crepe-large")
 
     # Or call the specific methods directly:
     rvc.convert(input_path="in.wav", output_path="out.wav", pitch=12)
@@ -276,17 +284,42 @@ finished.
 
 | Method | Description |
 |--------|-------------|
-| `RVClass(config, pth_path, sid=0, embedder_model=..., f0_method=...)` | Load the voice model into memory |
+| `RVClass(config, pth_path, sid=0, log_level=None)` | Load the voice model into memory. `f0_method` and `embedder_model` are inherited from `config`. |
 | `rvc.run(input_path, output_path="./output.wav", **kwargs)` | Auto-dispatch: batch if `input_path` is a directory, else single |
 | `rvc.convert(input_path, output_path="./output.wav", **kwargs)` | Single-file conversion |
 | `rvc.convert_batch(input_dir, **kwargs)` | Batch conversion of every audio file in `input_dir` |
 | `rvc.cleanup()` | Free GPU memory |
 | `with RVClass(...) as rvc:` | Context-manager form — auto-cleanup on exit |
 
-All `**kwargs` are the same conversion parameters documented in the
-[Command-Line Interface](#command-line-interface) section (`pitch`,
-`f0_method`, `index_path`, `index_rate`, `clean_audio`, `formant_shifting`,
-etc.).
+**Parameters inherited from `Config`** (set once, not repeated per call):
+- `f0_method` — F0 extraction method (default: `"rmvpe"`)
+- `embedder_model` — Voice embedder model (default: `"contentvec_base"`)
+
+**Per-call parameters** (can be passed to `.run()`, `.convert()`, `.convert_batch()`):
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `pitch` | `0` | Pitch shift in semitones |
+| `filter_radius` | `3` | Filter radius for pitch extraction |
+| `index_rate` | `0.5` | Feature retrieval ratio |
+| `volume_envelope` | `1.0` | Volume envelope ratio |
+| `protect` | `0.5` | Protect voiceless consonants |
+| `hop_length` | `64` | Hop length for pitch extraction |
+| `index_path` | `None` | Path to `.index` file |
+| `export_format` | `"wav"` | Output format (wav, flac, mp3, ogg) |
+| `resample_sr` | `0` | Resample sample rate (0 = disabled) |
+| `f0_autotune` | `False` | Enable F0 autotune |
+| `f0_autotune_strength` | `1.0` | Autotune strength (0.0–1.0) |
+| `split_audio` | `False` | Split audio into chunks |
+| `clean_audio` | `False` | Apply noise reduction |
+| `clean_strength` | `0.7` | Noise reduction strength |
+| `formant_shifting` | `False` | Enable formant shifting |
+| `formant_qfrency` | `0.8` | Formant quefrency |
+| `formant_timbre` | `0.8` | Formant timbre |
+| `proposal_pitch` | `False` | Enable proposal pitch |
+| `proposal_pitch_threshold` | `255.0` | Proposal pitch threshold |
+| `f0_method` | `None` | Override F0 method for this call only |
+| `embedder_model` | `None` | Override embedder model for this call only |
 
 ### Function-based inference (backwards-compatible)
 
@@ -926,6 +959,22 @@ These bugs were discovered while auditing the package for v0.1.1. They prevented
   - Demoted `clear_gpu_cache()`'s success message from `INFO` to `DEBUG`. Users who want verbose cache-clear logging can `set_log_level("debug")`.
   - Added `log_level` parameter to `Config.__init__()` and `RVClass.__init__()` so users can control verbosity at construction time. Added a `Config.set_log_level()` runtime method.
   - Exposed `get_logger`, `set_log_level`, `get_log_level`, `LOG_LEVELS` at the top level (`from rvc import set_log_level`).
+
+#### BUG 39: `f0_method` and `embedder_model` had to be repeated at every level
+- **Files**: `rvc/infer/infer.py`, `README.md`, `DOCUMENTATION.md`
+- **Description**: `Config(embedder_model=..., f0_method=...)` already stored both values, but `RVClass.__init__()` also required `embedder_model="contentvec_base"` and `f0_method="rmvpe"` as separate parameters (with the same hardcoded defaults), and `rvc.run()` / `rvc.convert()` / `rvc.convert_batch()` all required them AGAIN with the same defaults. Users had to write the same value 3 times:
+
+      config = Config(embedder_model="contentvec_base", f0_method="rmvpe")
+      rvc = RVClass(config=config, pth_path="model.pth",
+                    embedder_model="contentvec_base", f0_method="rmvpe")  # redundant
+      rvc.run(input_path="in.wav", f0_method="rmvpe")                     # redundant
+
+  If a user changed the value in `Config` but forgot to update the other two places, the call would silently use the wrong value (the hardcoded default `"rmvpe"`), defeating the purpose of having `Config` as a single source of truth.
+- **Fix**: Removed `embedder_model` and `f0_method` from `RVClass.__init__()` — they are now inherited from `config.f0_method` / `config.embedder_model`. In `convert()`, `convert_batch()`, and `infer_main()`, both params now default to `None`, which falls back to `self.f0_method` / `self.embedder_model` (which themselves come from `Config`). Users can still override per-call by passing a value explicitly:
+
+      rvc.run(input_path="tricky.wav", f0_method="crepe-large")
+
+  This makes `Config` the single source of truth and eliminates the triple-redundancy.
 
 ## Troubleshooting
 

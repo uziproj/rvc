@@ -53,19 +53,26 @@ to use the library.
 ```python
 from rvc import Config, RVClass
 
-# Hubert and RMVPE models load eagerly at Config initialization
+# f0_method and embedder_model are set ONCE here in Config
 # log_level: 'debug' | 'info' | 'warning' | 'error' | 'critical' (default: 'info')
 config = Config(embedder_model="contentvec_base", f0_method="rmvpe", log_level="info")
 
-# Load the voice model once, reuse for many conversions
+# RVClass inherits f0_method + embedder_model from Config — no need to repeat
 rvc = RVClass(config=config, pth_path="model.pth")
 
-# Single file
-rvc.run(input_path="input.wav", output_path="output.wav", pitch=12, f0_method="rmvpe")
+# Single file — only per-conversion params (pitch, etc.) here
+rvc.run(input_path="input.wav", output_path="output.wav", pitch=12)
 
 # Batch (auto-detected when input is a directory)
-rvc.run(input_path="./audio_folder", pitch=12, f0_method="rmvpe")
+rvc.run(input_path="./audio_folder", pitch=12)
+
+# Override f0_method for a single call (e.g. try CREPE on one file)
+rvc.run(input_path="tricky.wav", output_path="tricky_out.wav", pitch=12, f0_method="crepe-large")
 ```
+
+Note: `f0_method` and `embedder_model` are **not** in `RVClass.__init__()` or
+`rvc.run()` — they come from `Config`. You can still override them per-call
+by passing them explicitly (as shown above with `f0_method="crepe-large"`).
 
 **Logging control:**
 
@@ -346,6 +353,7 @@ The following bugs have been identified and fixed in this repository:
 - **No top-level exports**: users had to write `from rvc.infer.infer import run_inference_script` / `from rvc.lib.config import Config` etc. — added re-exports so `from rvc import *` and `from rvc import Config, run_inference_script` both work
 - **No class-based API**: `run_inference_script` reloaded the model on every call — added `RVClass` class so the model loads once and `.run()` can be called many times (with context-manager support for auto cleanup)
 - **Duplicate log output + GPU-cache spam**: `rvc/utils.py` had its own StreamHandler while `rvc/api/app.py` called `logging.basicConfig()` — every log line appeared twice with two different formats. Plus `clear_gpu_cache()` logged `"GPU cache cleared successfully"` at INFO level despite being called hundreds of times per batch conversion — fixed via centralized `rvc.lib.logging` module with `propagate=False`, demoted the cache-clear log to DEBUG, and added `log_level` parameter to `Config` and `RVClass`
+- **Redundant `f0_method` / `embedder_model`**: had to be passed at 3 levels (`Config`, `RVClass`, `rvc.run()`) — now `Config` is the single source of truth, `RVClass` inherits, and `rvc.run()` only takes per-conversion params. Can still override per-call with `rvc.run(f0_method="crepe-large")`
 
 For the complete list, see [DOCUMENTATION.md](DOCUMENTATION.md).
 

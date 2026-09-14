@@ -35,18 +35,22 @@ class RVClass:
 
         from rvc import Config, RVClass
 
+        # f0_method and embedder_model are set ONCE here in Config
         config = Config(embedder_model="contentvec_base", f0_method="rmvpe")
+
+        # RVClass inherits them — no need to repeat
         rvc = RVClass(config=config, pth_path="model.pth")
 
-        # single file
-        rvc.convert(input_path="in.wav", output_path="out.wav", pitch=12)
-
-        # or auto-detect (batch if input is a directory)
+        # rvc.run() also inherits — only per-conversion params (pitch, etc.) here
         rvc.run(input_path="in.wav", output_path="out.wav", pitch=12)
-        rvc.run(input_path="./audio_folder", pitch=12)
+        rvc.run(input_path="./audio_folder", pitch=12)  # auto batch
 
     The model is loaded once at ``__init__`` and reused for every call to
     :meth:`convert`, :meth:`convert_batch`, or :meth:`run`.
+
+    ``f0_method`` and ``embedder_model`` can still be overridden per-call
+    (e.g. ``rvc.run(input_path="in.wav", f0_method="crepe-large")``) — pass
+    ``None`` (the default) to inherit from :class:`Config`.
     """
 
     def __init__(
@@ -54,8 +58,6 @@ class RVClass:
         config,
         pth_path,
         sid=0,
-        embedder_model="contentvec_base",
-        f0_method="rmvpe",
         log_level=None,
     ):
         """Initialize the converter and load the voice model.
@@ -63,10 +65,10 @@ class RVClass:
         Args:
             config: A :class:`rvc.lib.config.Config` instance. Hubert and
                 RMVPE models are expected to be preloaded there.
+                ``config.f0_method`` and ``config.embedder_model`` are
+                inherited as the defaults for every conversion.
             pth_path: Path to the ``.pth`` voice model file.
             sid: Speaker ID (for multi-speaker models).
-            embedder_model: Embedder model name (used for predictor checks).
-            f0_method: F0 method name (used for predictor checks).
             log_level: Optional override for the log level. Accepts
                 ``"debug"``, ``"info"``, ``"warning"``, ``"error"``,
                 ``"critical"``, or a ``logging`` level integer. If
@@ -80,8 +82,14 @@ class RVClass:
         from rvc.lib.logging import get_logger
         self._logger = get_logger("RVClass")
 
-        check_predictors(f0_method)
-        check_embedders(embedder_model)
+        # Inherit f0_method and embedder_model from Config — single source
+        # of truth. Users who want to change them should either rebuild
+        # Config or override per-call via rvc.run(f0_method=...).
+        self.f0_method = config.f0_method
+        self.embedder_model = config.embedder_model
+
+        check_predictors(self.f0_method)
+        check_embedders(self.embedder_model)
 
         if not pth_path or not os.path.exists(pth_path) \
                 or os.path.isdir(pth_path) or not pth_path.endswith(".pth"):
@@ -92,8 +100,6 @@ class RVClass:
         self.config = config
         self.pth_path = pth_path
         self.sid = sid
-        self.embedder_model = embedder_model
-        self.f0_method = f0_method
 
         self._logger.info(f"Loading voice model: {pth_path}")
         # VoiceConverter handles the actual model loading + inference.
@@ -112,10 +118,10 @@ class RVClass:
         volume_envelope=1,
         protect=0.5,
         hop_length=64,
-        f0_method="rmvpe",
+        f0_method=None,
         index_path=None,
         export_format="wav",
-        embedder_model="contentvec_base",
+        embedder_model=None,
         resample_sr=0,
         f0_autotune=False,
         f0_autotune_strength=1,
@@ -128,15 +134,24 @@ class RVClass:
         proposal_pitch=False,
         proposal_pitch_threshold=255.0,
     ):
-        """Convert a single audio file."""
+        """Convert a single audio file.
+
+        ``f0_method`` and ``embedder_model`` default to ``None``, which
+        means "inherit from :class:`Config`". Pass a value explicitly to
+        override for this call only.
+        """
+        # Fall back to Config's values (set at RVClass.__init__)
+        f0_method = f0_method or self.f0_method
+        embedder_model = embedder_model or self.embedder_model
+
         if not os.path.exists(input_path):
-            print("[WARNING] No audio files found.")
+            self._logger.warning(f"Input file not found: {input_path}")
             return False
 
         check_predictors(f0_method)
         check_embedders(embedder_model)
 
-        print(f"[INFO] Conversion '{input_path}'...")
+        self._logger.info(f"Converting '{input_path}' -> '{output_path}'")
         if os.path.exists(output_path):
             os.remove(output_path)
 
@@ -166,7 +181,7 @@ class RVClass:
             proposal_pitch_threshold=proposal_pitch_threshold,
         )
 
-        print("[INFO] Conversion complete.")
+        self._logger.info("Conversion complete.")
         return True
 
     def convert_batch(
@@ -178,10 +193,10 @@ class RVClass:
         volume_envelope=1,
         protect=0.5,
         hop_length=64,
-        f0_method="rmvpe",
+        f0_method=None,
         index_path=None,
         export_format="wav",
-        embedder_model="contentvec_base",
+        embedder_model=None,
         resample_sr=0,
         f0_autotune=False,
         f0_autotune_strength=1,
@@ -194,18 +209,26 @@ class RVClass:
         proposal_pitch=False,
         proposal_pitch_threshold=255.0,
     ):
-        """Batch-convert every audio file in a directory."""
-        print("[INFO] Use batch conversion...")
+        """Batch-convert every audio file in a directory.
+
+        ``f0_method`` and ``embedder_model`` default to ``None``, which
+        means "inherit from :class:`Config`".
+        """
+        # Fall back to Config's values
+        f0_method = f0_method or self.f0_method
+        embedder_model = embedder_model or self.embedder_model
+
+        self._logger.info(f"Batch conversion from: {input_dir}")
         audio_files = [
             f for f in os.listdir(input_dir)
             if f.lower().endswith(_AUDIO_EXTS)
         ]
 
         if not audio_files:
-            print("[WARNING] No audio files found.")
+            self._logger.warning("No audio files found.")
             return False
 
-        print(f"[INFO] Found {len(audio_files)} audio files for conversion.")
+        self._logger.info(f"Found {len(audio_files)} audio files for conversion.")
 
         check_predictors(f0_method)
         check_embedders(embedder_model)
@@ -217,7 +240,7 @@ class RVClass:
                 os.path.splitext(audio)[0] + f"_output.{export_format}",
             )
 
-            print(f"[INFO] Conversion '{audio_path}'...")
+            self._logger.info(f"Converting '{audio_path}'...")
             if os.path.exists(output_audio):
                 os.remove(output_audio)
 
@@ -247,11 +270,18 @@ class RVClass:
                 proposal_pitch_threshold=proposal_pitch_threshold,
             )
 
-        print("[INFO] Conversion complete.")
+        self._logger.info("Batch conversion complete.")
         return True
 
     def run(self, input_path, output_path="./output.wav", **kwargs):
-        """Auto-dispatch: batch if ``input_path`` is a directory, else single."""
+        """Auto-dispatch: batch if ``input_path`` is a directory, else single.
+
+        ``f0_method`` and ``embedder_model`` are NOT in this signature —
+        they're inherited from :class:`Config`. To override per-call, pass
+        them as kwargs:
+
+            rvc.run(input_path="in.wav", f0_method="crepe-large")
+        """
         if os.path.isdir(input_path):
             # batch mode ignores output_path (per-file outputs go into input dir)
             return self.convert_batch(input_dir=input_path, **kwargs)
@@ -283,13 +313,13 @@ def infer_main(
     volume_envelope=1,
     protect=0.5,
     hop_length=64,
-    f0_method="rmvpe",
+    f0_method=None,
     input_path=None,
     output_path="./output.wav",
     pth_path=None,
     index_path=None,
     export_format="wav",
-    embedder_model="contentvec_base",
+    embedder_model=None,
     resample_sr=0,
     f0_autotune=False,
     f0_autotune_strength=1,
@@ -307,13 +337,18 @@ def infer_main(
     Maintained for backwards compatibility — new code should prefer
     instantiating :class:`RVClass` directly so the model is loaded once
     and reused across multiple conversions.
+
+    ``f0_method`` and ``embedder_model`` default to ``None``, which means
+    "inherit from ``config``". Pass a value explicitly to override.
     """
+    # Fall back to Config's values if not explicitly overridden
+    f0_method = f0_method or config.f0_method
+    embedder_model = embedder_model or config.embedder_model
+
     rvc = RVClass(
         config=config,
         pth_path=pth_path,
         sid=0,
-        embedder_model=embedder_model,
-        f0_method=f0_method,
     )
 
     return rvc.run(
